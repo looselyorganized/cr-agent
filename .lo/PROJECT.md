@@ -7,7 +7,7 @@ topics:
   - code-review-automation
   - agentic-infrastructure
   - coderabbit
-# repo: ""
+repo: "https://github.com/looselyorganized/cr-agent"
 stack:
   - Bun
   - TypeScript
