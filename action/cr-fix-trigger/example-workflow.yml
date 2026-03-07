@@ -1,0 +1,13 @@
+# Copy this file to .github/workflows/cr-fix.yml in your repository.
+name: CR Fix Trigger
+on:
+  pull_request_review:
+    types: [submitted]
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: looselyorganized/cr-agent/action/cr-fix-trigger@main
+        with:
+          supabase-url: ${{ secrets.CR_AGENT_SUPABASE_URL }}
+          supabase-secret-key: ${{ secrets.CR_AGENT_SUPABASE_SECRET_KEY }}
