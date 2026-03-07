@@ -45,7 +45,7 @@ runs:
       run: |
         set -euo pipefail
 
-        API="${SUPABASE_URL}/rest/v1/fix_requests"
+        API="${SUPABASE_URL}/rest/v1/cr_fix_requests"
         AUTH_HEADERS=(
           -H "apikey: ${SUPABASE_KEY}"
           -H "Authorization: Bearer ${SUPABASE_KEY}"
