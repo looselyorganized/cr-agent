@@ -21,7 +21,7 @@ export async function runAgent(
         maxBudgetUsd: config.maxBudgetUsd,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
-        stderr: "pipe",
+        stderr: (data: string) => console.error(`[agent:stderr] ${data.trim()}`),
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
