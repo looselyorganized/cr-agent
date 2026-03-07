@@ -21,6 +21,7 @@ export async function runAgent(
         maxBudgetUsd: config.maxBudgetUsd,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
+        stderr: "pipe",
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
@@ -29,7 +30,9 @@ export async function runAgent(
         },
       },
     })) {
-      // Stream through messages, we just need completion
+      if (message.type === "error") {
+        console.error(`[agent] error message: ${JSON.stringify(message)}`);
+      }
     }
     return { success: true };
   } catch (err) {
