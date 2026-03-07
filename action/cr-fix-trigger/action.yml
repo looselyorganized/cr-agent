@@ -1,0 +1,134 @@
+name: CR Fix Trigger
+description: >
+  Triggers a cr-agent fix cycle when CodeRabbit submits a pull request review.
+  Inserts or updates a row in Supabase so the fix worker can pick it up.
+
+inputs:
+  supabase-url:
+    description: Supabase project URL (e.g. https://xyz.supabase.co)
+    required: true
+  supabase-secret-key:
+    description: Supabase service-role secret key
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check review author
+      id: check-author
+      shell: bash
+      env:
+        REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+      run: |
+        # REQ-T02: skip if the review author is not coderabbitai[bot]
+        if [[ "$REVIEW_AUTHOR" != "coderabbitai[bot]" ]]; then
+          echo "Review author is '$REVIEW_AUTHOR', not coderabbitai[bot]. Skipping."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Review author is coderabbitai[bot]. Proceeding."
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upsert fix request in Supabase
+      if: steps.check-author.outputs.skip == 'false'
+      shell: bash
+      env:
+        SUPABASE_URL: ${{ inputs.supabase-url }}
+        SUPABASE_KEY: ${{ inputs.supabase-secret-key }}
+        REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        PR_BASE: ${{ github.event.pull_request.base.ref }}
+        REPO: ${{ github.repository }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+
+        API="${SUPABASE_URL}/rest/v1/fix_requests"
+        AUTH_HEADERS=(
+          -H "apikey: ${SUPABASE_KEY}"
+          -H "Authorization: Bearer ${SUPABASE_KEY}"
+          -H "Content-Type: application/json"
+          -H "Prefer: return=representation"
+        )
+
+        # ── Query for an existing row matching repo + pr_number ──────────
+        EXISTING=$(curl -s -w "\n%{http_code}" \
+          "${API}?repo=eq.${REPO}&pr_number=eq.${PR_NUMBER}&select=id,status" \
+          "${AUTH_HEADERS[@]}")
+
+        HTTP_CODE=$(echo "$EXISTING" | tail -1)
+        BODY=$(echo "$EXISTING" | sed '$d')
+
+        if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
+          echo "::error::Supabase query failed (HTTP ${HTTP_CODE}): ${BODY}"
+          exit 1
+        fi
+
+        ROW_COUNT=$(echo "$BODY" | jq 'length')
+        echo "Found ${ROW_COUNT} existing row(s) for ${REPO}#${PR_NUMBER}"
+
+        if [[ "$ROW_COUNT" -gt 0 ]]; then
+          STATUS=$(echo "$BODY" | jq -r '.[0].status')
+          ROW_ID=$(echo "$BODY" | jq -r '.[0].id')
+          echo "Existing row id=${ROW_ID} status=${STATUS}"
+
+          # REQ-T04: if pending or fixing, take no action
+          if [[ "$STATUS" == "pending" || "$STATUS" == "fixing" ]]; then
+            echo "Status is '${STATUS}'. No action needed."
+            exit 0
+          fi
+
+          # REQ-T03: if waiting_review, patch status back to pending
+          if [[ "$STATUS" == "waiting_review" ]]; then
+            echo "Status is 'waiting_review'. Patching to 'pending'."
+            PATCH_RESP=$(curl -s -w "\n%{http_code}" -X PATCH \
+              "${API}?id=eq.${ROW_ID}" \
+              "${AUTH_HEADERS[@]}" \
+              -d "$(jq -n '{status: "pending", triggered_by: env.ACTOR}')")
+
+            PATCH_CODE=$(echo "$PATCH_RESP" | tail -1)
+            PATCH_BODY=$(echo "$PATCH_RESP" | sed '$d')
+
+            if [[ "$PATCH_CODE" -lt 200 || "$PATCH_CODE" -ge 300 ]]; then
+              echo "::error::Supabase PATCH failed (HTTP ${PATCH_CODE}): ${PATCH_BODY}"
+              exit 1
+            fi
+            echo "Patched row ${ROW_ID} to 'pending'."
+            exit 0
+          fi
+        fi
+
+        # ── REQ-T01: Insert a new row ───────────────────────────────────
+        echo "Inserting new fix_request for ${REPO}#${PR_NUMBER}"
+        INSERT_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+          "${API}" \
+          "${AUTH_HEADERS[@]}" \
+          -d "$(jq -n \
+            --arg repo   "$REPO" \
+            --arg pr_num  "$PR_NUMBER" \
+            --arg pr_url  "$PR_URL" \
+            --arg branch  "$PR_BRANCH" \
+            --arg base    "$PR_BASE" \
+            --arg actor   "$ACTOR" \
+            '{
+              repo:         $repo,
+              pr_number:    ($pr_num | tonumber),
+              pr_url:       $pr_url,
+              branch:       $branch,
+              base_branch:  $base,
+              triggered_by: $actor,
+              status:       "pending"
+            }')")
+
+        INSERT_CODE=$(echo "$INSERT_RESP" | tail -1)
+        INSERT_BODY=$(echo "$INSERT_RESP" | sed '$d')
+
+        if [[ "$INSERT_CODE" -lt 200 || "$INSERT_CODE" -ge 300 ]]; then
+          echo "::error::Supabase POST failed (HTTP ${INSERT_CODE}): ${INSERT_BODY}"
+          exit 1
+        fi
+
+        NEW_ID=$(echo "$INSERT_BODY" | jq -r '.[0].id // "unknown"')
+        echo "Created fix_request id=${NEW_ID} with status=pending."
