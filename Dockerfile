@@ -9,4 +9,7 @@ RUN bun install --frozen-lockfile --production
 COPY src/ src/
 COPY tsconfig.json ./
 
+RUN useradd -m agent
+USER agent
+
 CMD ["bun", "run", "src/index.ts"]
