@@ -9,5 +9,5 @@ jobs:
     steps:
       - uses: looselyorganized/cr-agent/action/cr-fix-trigger@main
         with:
-          supabase-url: ${{ secrets.CR_AGENT_SUPABASE_URL }}
-          supabase-secret-key: ${{ secrets.CR_AGENT_SUPABASE_SECRET_KEY }}
+          cr-agent-url: ${{ secrets.CR_AGENT_URL }}
+          cr-webhook-secret: ${{ secrets.CR_WEBHOOK_SECRET }}

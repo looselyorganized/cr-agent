@@ -1,11 +1,10 @@
 import { config } from "./config";
-import { subscribeToPendingRequests } from "./supabase";
-import { handleFixRequest } from "./fix-session";
+import { app } from "./server";
 
 console.log("cr-agent starting...");
-console.log(`max_rounds=${config.maxRounds} model=${config.model}`);
+console.log(`port=${config.port} max_rounds=${config.maxRounds} model=${config.model}`);
 
-subscribeToPendingRequests((row) => {
-  console.log(`[trigger] fix request for ${row.repo}#${row.pr_number}`);
-  handleFixRequest(row);
-});
+export default {
+  port: config.port,
+  fetch: app.fetch,
+};

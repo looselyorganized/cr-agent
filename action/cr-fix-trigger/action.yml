@@ -1,14 +1,14 @@
 name: CR Fix Trigger
 description: >
   Triggers a cr-agent fix cycle when CodeRabbit submits a pull request review.
-  Inserts or updates a row in Supabase so the fix worker can pick it up.
+  POSTs PR metadata to the cr-agent webhook endpoint.
 
 inputs:
-  supabase-url:
-    description: Supabase project URL (e.g. https://xyz.supabase.co)
+  cr-agent-url:
+    description: cr-agent webhook URL (e.g. https://cr-agent.up.railway.app/webhook)
     required: true
-  supabase-secret-key:
-    description: Supabase service-role secret key
+  cr-webhook-secret:
+    description: Shared secret for webhook authentication
     required: true
 
 runs:
@@ -29,13 +29,12 @@ runs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Upsert fix request in Supabase
+    - name: POST to cr-agent webhook
       if: steps.check-author.outputs.skip == 'false'
       shell: bash
       env:
-        SUPABASE_URL: ${{ inputs.supabase-url }}
-        SUPABASE_KEY: ${{ inputs.supabase-secret-key }}
-        REVIEW_AUTHOR: ${{ github.event.review.user.login }}
+        CR_AGENT_URL: ${{ inputs.cr-agent-url }}
+        CR_WEBHOOK_SECRET: ${{ inputs.cr-webhook-secret }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_URL: ${{ github.event.pull_request.html_url }}
         PR_BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -45,90 +44,37 @@ runs:
       run: |
         set -euo pipefail
 
-        API="${SUPABASE_URL}/rest/v1/cr_fix_requests"
-        AUTH_HEADERS=(
-          -H "apikey: ${SUPABASE_KEY}"
-          -H "Authorization: Bearer ${SUPABASE_KEY}"
-          -H "Content-Type: application/json"
-          -H "Prefer: return=representation"
-        )
+        PAYLOAD=$(jq -n \
+          --arg repo   "$REPO" \
+          --arg pr_num  "$PR_NUMBER" \
+          --arg pr_url  "$PR_URL" \
+          --arg branch  "$PR_BRANCH" \
+          --arg base    "$PR_BASE" \
+          --arg actor   "$ACTOR" \
+          '{
+            repo:        $repo,
+            pr_number:   ($pr_num | tonumber),
+            pr_url:      $pr_url,
+            branch:      $branch,
+            base_branch: $base,
+            actor:       $actor
+          }')
 
-        # ── Query for an existing row matching repo + pr_number ──────────
-        EXISTING=$(curl -s -w "\n%{http_code}" \
-          "${API}?repo=eq.${REPO}&pr_number=eq.${PR_NUMBER}&select=id,status" \
-          "${AUTH_HEADERS[@]}")
+        RESP=$(curl -s -w "\n%{http_code}" -X POST \
+          "${CR_AGENT_URL}" \
+          -H "Authorization: Bearer ${CR_WEBHOOK_SECRET}" \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD")
 
-        HTTP_CODE=$(echo "$EXISTING" | tail -1)
-        BODY=$(echo "$EXISTING" | sed '$d')
+        HTTP_CODE=$(echo "$RESP" | tail -1)
+        BODY=$(echo "$RESP" | sed '$d')
+
+        echo "Response (HTTP ${HTTP_CODE}): ${BODY}"
 
         if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
-          echo "::error::Supabase query failed (HTTP ${HTTP_CODE}): ${BODY}"
+          echo "::error::Webhook request failed (HTTP ${HTTP_CODE}): ${BODY}"
           exit 1
         fi
 
-        ROW_COUNT=$(echo "$BODY" | jq 'length')
-        echo "Found ${ROW_COUNT} existing row(s) for ${REPO}#${PR_NUMBER}"
-
-        if [[ "$ROW_COUNT" -gt 0 ]]; then
-          STATUS=$(echo "$BODY" | jq -r '.[0].status')
-          ROW_ID=$(echo "$BODY" | jq -r '.[0].id')
-          echo "Existing row id=${ROW_ID} status=${STATUS}"
-
-          # REQ-T04: if pending or fixing, take no action
-          if [[ "$STATUS" == "pending" || "$STATUS" == "fixing" ]]; then
-            echo "Status is '${STATUS}'. No action needed."
-            exit 0
-          fi
-
-          # REQ-T03: if waiting_review, patch status back to pending
-          if [[ "$STATUS" == "waiting_review" ]]; then
-            echo "Status is 'waiting_review'. Patching to 'pending'."
-            PATCH_RESP=$(curl -s -w "\n%{http_code}" -X PATCH \
-              "${API}?id=eq.${ROW_ID}" \
-              "${AUTH_HEADERS[@]}" \
-              -d "$(jq -n '{status: "pending", triggered_by: env.ACTOR}')")
-
-            PATCH_CODE=$(echo "$PATCH_RESP" | tail -1)
-            PATCH_BODY=$(echo "$PATCH_RESP" | sed '$d')
-
-            if [[ "$PATCH_CODE" -lt 200 || "$PATCH_CODE" -ge 300 ]]; then
-              echo "::error::Supabase PATCH failed (HTTP ${PATCH_CODE}): ${PATCH_BODY}"
-              exit 1
-            fi
-            echo "Patched row ${ROW_ID} to 'pending'."
-            exit 0
-          fi
-        fi
-
-        # ── REQ-T01: Insert a new row ───────────────────────────────────
-        echo "Inserting new fix_request for ${REPO}#${PR_NUMBER}"
-        INSERT_RESP=$(curl -s -w "\n%{http_code}" -X POST \
-          "${API}" \
-          "${AUTH_HEADERS[@]}" \
-          -d "$(jq -n \
-            --arg repo   "$REPO" \
-            --arg pr_num  "$PR_NUMBER" \
-            --arg pr_url  "$PR_URL" \
-            --arg branch  "$PR_BRANCH" \
-            --arg base    "$PR_BASE" \
-            --arg actor   "$ACTOR" \
-            '{
-              repo:         $repo,
-              pr_number:    ($pr_num | tonumber),
-              pr_url:       $pr_url,
-              branch:       $branch,
-              base_branch:  $base,
-              triggered_by: $actor,
-              status:       "pending"
-            }')")
-
-        INSERT_CODE=$(echo "$INSERT_RESP" | tail -1)
-        INSERT_BODY=$(echo "$INSERT_RESP" | sed '$d')
-
-        if [[ "$INSERT_CODE" -lt 200 || "$INSERT_CODE" -ge 300 ]]; then
-          echo "::error::Supabase POST failed (HTTP ${INSERT_CODE}): ${INSERT_BODY}"
-          exit 1
-        fi
-
-        NEW_ID=$(echo "$INSERT_BODY" | jq -r '.[0].id // "unknown"')
-        echo "Created fix_request id=${NEW_ID} with status=pending."
+        ACTION=$(echo "$BODY" | jq -r '.action // "unknown"')
+        echo "Webhook result: ${ACTION}"

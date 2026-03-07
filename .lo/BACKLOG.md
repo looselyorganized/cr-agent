@@ -20,6 +20,10 @@ Status: done
 Analytics pipeline tracking CR+Claude resolution efficacy: what percentage of review comments are autonomously resolved, which categories consistently need humans, and aggregate metrics over time.
 Status: backlog
 
+### f004 — Evals
+Analytics pipeline tracking CR+Claude resolution efficacy: what percentage of review comments are autonomously resolved, which categories consistently need humans, and aggregate metrics over time.
+Status: backlog
+
 ## Tasks
 
 - [x] t001 ~~Write EARS requirements for minimal feature set~~ -> 2026-03-07
