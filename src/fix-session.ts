@@ -108,7 +108,7 @@ async function runFixSession(row: FixRequest): Promise<void> {
       log("info", "pr_closed", ctx);
       await supabase
         .from("cr_fix_rounds")
-        .update({ status: "cancelled", finished_at: new Date().toISOString() })
+        .update({ status: "failed", error: "PR closed", finished_at: new Date().toISOString() })
         .eq("id", roundId);
       await updateRequest(row.id, {
         status: "cancelled",
@@ -175,12 +175,12 @@ async function runFixSession(row: FixRequest): Promise<void> {
         .from("cr_fix_rounds")
         .update({
           status: "failed",
-          error_message: result.error,
+          error: result.error,
           duration_ms: durationMs,
           finished_at: new Date().toISOString(),
         })
         .eq("id", roundId);
-      await updateRequest(row.id, { status: "error" });
+      await updateRequest(row.id, { status: "failed" });
       return;
     }
 
