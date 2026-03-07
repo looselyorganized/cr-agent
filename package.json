@@ -1,0 +1,16 @@
+{
+  "name": "t001-ears-requirements",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.71",
+    "@supabase/supabase-js": "^2.98.0"
+  }
+}
