@@ -9,6 +9,8 @@ export const config = {
   supabaseSecretKey: required("SUPABASE_SECRET_KEY"),
   anthropicApiKey: required("ANTHROPIC_API_KEY"),
   githubToken: required("GITHUB_TOKEN"),
+  webhookSecret: required("CR_WEBHOOK_SECRET"),
+  port: Number(process.env.PORT ?? "3000"),
   maxRounds: Number(process.env.MAX_ROUNDS ?? "3"),
   maxTurns: Number(process.env.MAX_TURNS ?? "30"),
   maxBudgetUsd: Number(process.env.MAX_BUDGET_USD ?? "5"),

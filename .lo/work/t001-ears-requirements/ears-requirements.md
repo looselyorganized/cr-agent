@@ -22,6 +22,7 @@ Minimal viable system: GitHub Action trigger (f002), Railway agent service (f001
 - canUseTool is deferred to v2 alongside the response UI. V1 relies on Agent SDK's allowedTools, maxTurns, and maxBudgetUsd for safety.
 - Max rounds defaults to 3. Most CR reviews resolve in 1-2 rounds.
 - Supabase uses publishable key (read-only) and secret key (full access). service_role is deprecated.
+- The GH Action POSTs to the cr-agent webhook (2 secrets: CR_AGENT_URL + CR_WEBHOOK_SECRET). The cr-agent handles upsert logic internally.
 
 ---
 
@@ -29,19 +30,19 @@ Minimal viable system: GitHub Action trigger (f002), Railway agent service (f001
 
 ### Event Detection
 
-REQ-T01: When a `pull_request_review` event fires and the review author is `coderabbitai[bot]`, the Action shall insert a row into `cr_fix_requests` with status `pending`, populating: repo, pr_number, pr_url, branch, base_branch, triggered_by, created_at.
+REQ-T01: When a `pull_request_review` event fires and the review author is `coderabbitai[bot]`, the Action shall POST PR metadata (repo, pr_number, pr_url, branch, base_branch, actor) to the cr-agent webhook endpoint.
 
 REQ-T02: When a `pull_request_review` event fires and the review author is not `coderabbitai[bot]`, the Action shall take no action.
 
 ### Deduplication
 
-REQ-T03: When a fix request row already exists for the same repo and PR number with status `waiting_review`, the Action shall update that row's status to `pending`.
+REQ-T03: When the webhook receives a request for a repo+pr_number that already has status `waiting_review`, the cr-agent shall update that row's status to `pending`.
 
-REQ-T04: When a fix request row already exists for the same repo and PR number with status `pending` or `fixing`, the Action shall take no action.
+REQ-T04: When the webhook receives a request for a repo+pr_number that already has status `pending` or `fixing`, the cr-agent shall return a no-op response.
 
 ### Configuration
 
-REQ-T05: The Action shall read `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from GitHub Actions secrets.
+REQ-T05: The Action shall read `CR_AGENT_URL` and `CR_WEBHOOK_SECRET` from GitHub Actions secrets.
 
 REQ-T06: The Action shall be a single composite action YAML file requiring no modification beyond secrets configuration to add to a new repository.
 
@@ -49,11 +50,25 @@ REQ-T06: The Action shall be a single composite action YAML file requiring no mo
 
 ## 2. Railway Agent Service (f001)
 
-### Subscription
+### HTTP Server
 
-REQ-A01: While the service is running, it shall maintain a Supabase Realtime subscription on the `cr_fix_requests` table filtered to status `pending`.
+REQ-A01: While the service is running, it shall serve an HTTP server (Hono on Bun) with `/webhook` and `/health` routes.
 
-REQ-A02: When a row transitions to status `pending`, the service shall start a fix session for that row.
+REQ-A02: When a valid webhook request is received with status that should trigger a fix, the service shall upsert the row in Supabase and start a fix session.
+
+### Webhook Authentication & Validation
+
+REQ-A18: The service shall authenticate inbound webhooks via `Authorization: Bearer <token>` matched against `CR_WEBHOOK_SECRET`. Reject with 401 on mismatch.
+
+REQ-A19: The service shall validate webhook payload fields (repo, pr_number, pr_url, branch, base_branch, actor). Reject with 400 if missing.
+
+REQ-A20: The service shall expose `GET /health` returning 200 for Railway health checks.
+
+### Webhook Upsert Logic
+
+REQ-A21: The webhook shall perform the upsert logic: query existing row for repo+pr_number, no-op if pending/fixing, patch to pending if waiting_review, insert new row otherwise.
+
+REQ-A22: The webhook shall return 200 immediately after upsert. Fix sessions run asynchronously (fire-and-forget).
 
 ### Fix Session
 
@@ -69,7 +84,7 @@ REQ-A07: When a fix round push succeeds, the service shall update the row's stat
 
 ### Multi-Round
 
-REQ-A08: While a fix request has status `waiting_review` and a new CodeRabbit review arrives (row returns to `pending` via the Action), the service shall start another fix round on the same row.
+REQ-A08: While a fix request has status `waiting_review` and a new CodeRabbit review arrives (row returns to `pending` via the webhook), the service shall start another fix round on the same row.
 
 REQ-A09: When `current_round` reaches `max_rounds` (default: 3), the service shall update the row's status to `stuck`.
 
@@ -87,11 +102,9 @@ REQ-A13: If a git push fails, then the service shall update the round's status t
 
 REQ-A14: If the PR is closed or merged during a fix session, then the service shall update the fix request status to `cancelled` and stop the session.
 
-REQ-A15: If the Supabase Realtime connection drops, then the service shall attempt to reconnect with exponential backoff.
-
 ### Configuration
 
-REQ-A16: The service shall read `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ANTHROPIC_API_KEY`, and `GITHUB_TOKEN` from environment variables.
+REQ-A16: The service shall read `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, and `CR_WEBHOOK_SECRET` from environment variables.
 
 REQ-A17: The service shall support environment variable configuration for `max_rounds` (default: 3), `max_turns`, `max_budget_usd`, `model`, and `allowed_tools`.
 
@@ -113,7 +126,7 @@ REQ-S04: The `cr_fix_rounds.status` column shall accept only: `running`, `comple
 
 ### Realtime
 
-REQ-S05: The `cr_fix_requests` table shall be added to the Supabase Realtime publication.
+REQ-S05: The `cr_fix_requests` table shall be added to the Supabase Realtime publication. (For downstream UI consumers, not trigger.)
 
 ### Security
 
