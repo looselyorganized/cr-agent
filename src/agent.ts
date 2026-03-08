@@ -61,7 +61,7 @@ export async function runAgent(
         },
       },
     })) {
-      console.log(JSON.stringify({ event: "agent_message", type: message.type }));
+      console.log(JSON.stringify({ event: "agent_message", type: message.type, subtype: (message as any).subtype, message: JSON.stringify(message).slice(0, 500) }));
       if (message.type === "error") {
         console.error(JSON.stringify({ event: "agent_error_message", message }));
       }
