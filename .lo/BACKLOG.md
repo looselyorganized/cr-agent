@@ -8,8 +8,8 @@ updated: 2026-03-07
 Long-running Bun service on Railway that subscribes to Supabase Realtime for fix requests, runs Claude Agent SDK to resolve CodeRabbit comments, and manages the full PR lifecycle (pending → fixing → waiting_review → clean).
 Status: done
 
-### f002 — GitHub Action Trigger
-Copy-pasteable GitHub Action YAML that fires on `pull_request_review` events from CodeRabbit, writes a "fix needed" row to Supabase. Zero infrastructure — replaces the webhook server from the original f004 design.
+### f002 — GitHub Org Webhook Trigger
+Direct org-level GitHub webhook sends `pull_request_review` events to cr-agent. Replaces per-repo GitHub Action workflow — zero files per repo, native HMAC-SHA256 auth.
 Status: done
 
 ### f003 — Supabase Schema

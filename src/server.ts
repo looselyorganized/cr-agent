@@ -9,31 +9,92 @@ const app = new Hono();
 // REQ-A20: Health check
 app.get("/health", (c) => c.json({ status: "ok" }));
 
-// REQ-A18: Auth middleware for webhook
+// HMAC-SHA256 signature verification for GitHub webhooks
+async function verifySignature(
+  secret: string,
+  payload: string,
+  signature: string,
+): Promise<boolean> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payload),
+  );
+  const expected =
+    "sha256=" +
+    Array.from(new Uint8Array(sig))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  // Constant-time comparison
+  if (expected.length !== signature.length) return false;
+  let result = 0;
+  for (let i = 0; i < expected.length; i++) {
+    result |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+// REQ-A18: GitHub org webhook — accepts native pull_request_review events
 app.post("/webhook", async (c) => {
-  const auth = c.req.header("Authorization");
-  if (!auth || auth !== `Bearer ${config.webhookSecret}`) {
-    return c.json({ error: "unauthorized" }, 401);
+  // HMAC-SHA256 signature verification
+  const signature = c.req.header("X-Hub-Signature-256");
+  if (!signature) {
+    return c.json({ error: "missing signature" }, 401);
   }
 
-  // REQ-A19: Validate payload
-  const body = await c.req.json().catch(() => null);
-  if (!body) {
-    return c.json({ error: "invalid json" }, 400);
+  const rawBody = await c.req.text();
+  const valid = await verifySignature(
+    config.webhookSecret,
+    rawBody,
+    signature,
+  );
+  if (!valid) {
+    return c.json({ error: "invalid signature" }, 401);
   }
 
-  const { repo, pr_number, pr_url, branch, base_branch, actor } = body;
+  const body = JSON.parse(rawBody);
+
+  // Filter: only pull_request_review events with action "submitted"
+  if (body.action !== "submitted") {
+    return c.json({ action: "ignored", reason: "not a submitted review" });
+  }
+
+  // Filter: only reviews from coderabbitai[bot]
+  const reviewAuthor = body.review?.user?.login;
+  if (reviewAuthor !== "coderabbitai[bot]") {
+    return c.json({
+      action: "ignored",
+      reason: `review by ${reviewAuthor}, not coderabbitai[bot]`,
+    });
+  }
+
+  // Extract fields from GitHub's native payload
+  const repo = body.repository?.full_name;
+  const pr_number = body.pull_request?.number;
+  const pr_url = body.pull_request?.html_url;
+  const branch = body.pull_request?.head?.ref;
+  const base_branch = body.pull_request?.base?.ref;
+  const actor = reviewAuthor;
+
   const missing = [];
   if (!repo) missing.push("repo");
   if (!pr_number) missing.push("pr_number");
   if (!pr_url) missing.push("pr_url");
   if (!branch) missing.push("branch");
   if (!base_branch) missing.push("base_branch");
-  if (!actor) missing.push("actor");
 
   if (missing.length > 0) {
     return c.json({ error: `missing fields: ${missing.join(", ")}` }, 400);
   }
+
+  log("info", "webhook_received", { repo, pr: pr_number, reviewer: reviewAuthor });
 
   // REQ-A21: Upsert logic
   const { data: existing, error: queryErr } = await supabase
