@@ -1,6 +1,9 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "./config";
 import { log } from "./log";
+import { existsSync } from "fs";
+import { join } from "path";
+import { fileURLToPath } from "url";
 
 export interface AgentResult {
   success: boolean;
@@ -15,6 +18,22 @@ export async function runAgent(
   // logs but doesn't surface in the error returned to fix-session.
   const stderrLines: string[] = [];
 
+  // Pre-flight diagnostics
+  const sdkDir = join(fileURLToPath(import.meta.url), "../../node_modules/@anthropic-ai/claude-agent-sdk");
+  const cliPath = join(sdkDir, "cli.js");
+  console.log(JSON.stringify({
+    event: "agent_preflight",
+    cwd,
+    cwdExists: existsSync(cwd),
+    cliJsExists: existsSync(cliPath),
+    sdkDir,
+    hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    keyPrefix: process.env.ANTHROPIC_API_KEY?.slice(0, 10),
+    model: config.model,
+    homeDir: process.env.HOME,
+    user: process.env.USER,
+  }));
+
   try {
     for await (const message of query({
       prompt,
@@ -26,11 +45,12 @@ export async function runAgent(
         maxBudgetUsd: config.maxBudgetUsd,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
+        debug: true,
         stderr: (data: string) => {
           const line = data.trim();
           if (line) {
             stderrLines.push(line);
-            log("debug", "agent_stderr", { line });
+            console.error(`[agent-stderr] ${line}`);
           }
         },
         systemPrompt: {
@@ -41,8 +61,9 @@ export async function runAgent(
         },
       },
     })) {
+      console.log(JSON.stringify({ event: "agent_message", type: message.type }));
       if (message.type === "error") {
-        log("error", "agent_error_message", { message: JSON.stringify(message) });
+        console.error(JSON.stringify({ event: "agent_error_message", message }));
       }
     }
     return { success: true };
@@ -52,6 +73,7 @@ export async function runAgent(
     const detail = stderr
       ? `${errorMsg}\n--- stderr (last 20 lines) ---\n${stderr}`
       : errorMsg;
+    console.error(JSON.stringify({ event: "agent_caught_error", error: errorMsg, stderrLineCount: stderrLines.length, lastStderr: stderrLines.slice(-5) }));
     return { success: false, error: detail };
   }
 }
