@@ -1,9 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "./config";
-import { log } from "./log";
-import { existsSync } from "fs";
-import { join } from "path";
-import { fileURLToPath } from "url";
 
 export interface AgentResult {
   success: boolean;
@@ -14,25 +10,8 @@ export async function runAgent(
   prompt: string,
   cwd: string
 ): Promise<AgentResult> {
-  // Capture stderr output for diagnostics — console.error goes to container
-  // logs but doesn't surface in the error returned to fix-session.
   const stderrLines: string[] = [];
-
-  // Pre-flight diagnostics
-  const sdkDir = join(fileURLToPath(import.meta.url), "../../node_modules/@anthropic-ai/claude-agent-sdk");
-  const cliPath = join(sdkDir, "cli.js");
-  console.log(JSON.stringify({
-    event: "agent_preflight",
-    cwd,
-    cwdExists: existsSync(cwd),
-    cliJsExists: existsSync(cliPath),
-    sdkDir,
-    hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
-    keyPrefix: process.env.ANTHROPIC_API_KEY?.slice(0, 10),
-    model: config.model,
-    homeDir: process.env.HOME,
-    user: process.env.USER,
-  }));
+  let lastResult: { is_error?: boolean; result?: string } | null = null;
 
   try {
     for await (const message of query({
@@ -45,13 +24,9 @@ export async function runAgent(
         maxBudgetUsd: config.maxBudgetUsd,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
-        debug: true,
         stderr: (data: string) => {
           const line = data.trim();
-          if (line) {
-            stderrLines.push(line);
-            console.error(`[agent-stderr] ${line}`);
-          }
+          if (line) stderrLines.push(line);
         },
         systemPrompt: {
           type: "preset",
@@ -61,19 +36,29 @@ export async function runAgent(
         },
       },
     })) {
-      console.log(JSON.stringify({ event: "agent_message", type: message.type, subtype: (message as any).subtype, message: JSON.stringify(message).slice(0, 500) }));
-      if (message.type === "error") {
-        console.error(JSON.stringify({ event: "agent_error_message", message }));
+      if (message.type === "result") {
+        lastResult = message as any;
       }
+    }
+
+    // The iterator completed without throwing, but the result may indicate
+    // an application-level error (e.g. credit balance, rate limit).
+    if (lastResult?.is_error) {
+      return { success: false, error: lastResult.result ?? "Unknown agent error" };
     }
     return { success: true };
   } catch (err) {
+    // If we got a result message before the process crashed, prefer that —
+    // it's more informative than "process exited with code 1".
+    if (lastResult?.is_error && lastResult.result) {
+      return { success: false, error: lastResult.result };
+    }
+
     const errorMsg = String(err);
-    const stderr = stderrLines.slice(-20).join("\n"); // Last 20 lines
+    const stderr = stderrLines.slice(-20).join("\n");
     const detail = stderr
       ? `${errorMsg}\n--- stderr (last 20 lines) ---\n${stderr}`
       : errorMsg;
-    console.error(JSON.stringify({ event: "agent_caught_error", error: errorMsg, stderrLineCount: stderrLines.length, lastStderr: stderrLines.slice(-5) }));
     return { success: false, error: detail };
   }
 }
