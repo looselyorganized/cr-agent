@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "./config";
+import { log } from "./log";
 
 export interface AgentResult {
   success: boolean;
@@ -10,6 +11,10 @@ export async function runAgent(
   prompt: string,
   cwd: string
 ): Promise<AgentResult> {
+  // Capture stderr output for diagnostics — console.error goes to container
+  // logs but doesn't surface in the error returned to fix-session.
+  const stderrLines: string[] = [];
+
   try {
     for await (const message of query({
       prompt,
@@ -21,7 +26,13 @@ export async function runAgent(
         maxBudgetUsd: config.maxBudgetUsd,
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
-        stderr: (data: string) => console.error(`[agent:stderr] ${data.trim()}`),
+        stderr: (data: string) => {
+          const line = data.trim();
+          if (line) {
+            stderrLines.push(line);
+            log("debug", "agent_stderr", { line });
+          }
+        },
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
@@ -31,11 +42,16 @@ export async function runAgent(
       },
     })) {
       if (message.type === "error") {
-        console.error(`[agent] error message: ${JSON.stringify(message)}`);
+        log("error", "agent_error_message", { message: JSON.stringify(message) });
       }
     }
     return { success: true };
   } catch (err) {
-    return { success: false, error: String(err) };
+    const errorMsg = String(err);
+    const stderr = stderrLines.slice(-20).join("\n"); // Last 20 lines
+    const detail = stderr
+      ? `${errorMsg}\n--- stderr (last 20 lines) ---\n${stderr}`
+      : errorMsg;
+    return { success: false, error: detail };
   }
 }

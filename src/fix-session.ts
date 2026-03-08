@@ -132,14 +132,16 @@ async function runFixSession(row: FixRequest): Promise<void> {
       return;
     }
 
-    // Clone the repo
+    // Clone the repo — treeless clone fetches all commit history (so merge-base
+    // works for git diff) but downloads file blobs only on demand.
+    // --no-single-branch ensures the base branch ref is available locally.
     log("info", "cloning_repo", { ...ctx, branch: row.branch });
     await spawn(["rm", "-rf", workdir]);
     const cloneResult = await spawn([
       "git",
       "clone",
-      "--depth",
-      "1",
+      "--filter=blob:none",
+      "--no-single-branch",
       "--branch",
       row.branch,
       `https://x-access-token:${config.githubToken}@github.com/${row.repo}.git`,
@@ -149,8 +151,9 @@ async function runFixSession(row: FixRequest): Promise<void> {
       throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.stdout}`);
     }
 
-    // Fetch base branch ref so Claude Code's git diff works on shallow clones
-    await spawn(["git", "-C", workdir, "fetch", "origin", `${row.base_branch}:${row.base_branch}`]);
+    // Create local base branch ref — Claude Code's startup runs git diff
+    // <base>...HEAD which requires a local branch, not just a remote tracking ref.
+    await spawn(["git", "-C", workdir, "branch", row.base_branch, `origin/${row.base_branch}`]);
 
     // Build prompt
     const fullPrompt = [
