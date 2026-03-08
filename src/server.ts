@@ -117,10 +117,12 @@ app.post("/webhook", async (c) => {
     }
 
     // Patch to pending if waiting_review or terminal status (clean/stuck/failed/cancelled)
+    // Reset current_round so the next cycle starts fresh
     const { error: patchErr } = await supabase
       .from("cr_fix_requests")
       .update({
         status: "pending",
+        current_round: 0,
         triggered_by: actor,
         updated_at: new Date().toISOString(),
       })
