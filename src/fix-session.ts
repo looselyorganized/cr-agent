@@ -149,6 +149,9 @@ async function runFixSession(row: FixRequest): Promise<void> {
       throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.stdout}`);
     }
 
+    // Fetch base branch ref so Claude Code's git diff works on shallow clones
+    await spawn(["git", "-C", workdir, "fetch", "origin", `${row.base_branch}:${row.base_branch}`]);
+
     // Build prompt
     const fullPrompt = [
       `You are working on PR #${row.pr_number} in ${row.repo} (round ${nextRound}/${row.max_rounds}).`,
