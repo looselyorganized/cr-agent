@@ -1,13 +1,9 @@
 ---
-proj_id: "proj_4e99b9ff-82e2-4d06-a4f0-78f4185c4017"
+id: "proj_4e99b9ff-82e2-4d06-a4f0-78f4185c4017"
 title: "cr-agent"
 description: "Autonomous CodeRabbit review fixer powered by Claude Agent SDK."
 status: "explore"
 state: "private"
-topics:
-  - code-review-automation
-  - agentic-infrastructure
-  - coderabbit
 repo: "https://github.com/looselyorganized/cr-agent"
 stack:
   - Bun
